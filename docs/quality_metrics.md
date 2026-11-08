@@ -50,24 +50,31 @@ print(metrics.excluded_edges)
 This module is intended as the first step toward incident timeline reconstruction,
 not a root-cause determination. Keep original logs outside Git.
 
-## Real-log regression checkpoint
+## Configuration-driven log validation
 
-With the original November 3 logs in a local directory, run:
+The generic validator contains no aircraft names or log filenames. Define
+named cases in a JSON file (see `config/november_log_validation.json`).
+Each case requires `file` and can optionally include `instance`,
+`gap_factor`, `minimum_gap_s`, and `expected` with any combination of
+`sha256`, `reset_count`, or `gap_count`.
 
 ```sh
-python scripts/validate_november_logs.py /path/to/log-directory
+python scripts/validate_logs.py \
+  --config config/november_log_validation.json \
+  --log-directory /path/to/logs \
+  --keys log91 log94
+
+python scripts/validate_logs.py \
+  --config config/november_log_validation.json \
+  --log-directory /path/to/logs --all
 ```
 
-The script verifies known source SHA-256 hashes before parsing, compares raw
-distance with the original reconstruction, and checks the expected reset and
-significant-gap counts. It prints recorded, armed, and airborne durations as
-well as raw and quality-filtered distance. It never modifies the source files
-or writes a report.
+For an unfamiliar log, omit `expected` to calculate diagnostics without
+asserting a baseline. Relative file paths resolve under `--log-directory`,
+or the configuration directory if the option is omitted. Original logs remain
+unmodified. The program prints results and exits nonzero on any failure.
 
-Expected diagnostics from the earlier independent inspection: log 91 has no
-reset or significant position gap; log 108 has three significant local-position
-interval gaps (separate from nine ULog dropout records); log 94 has one
-simultaneous horizontal/vertical reset event. These expectations are **not**
-proof that the new algorithm has passed on the real logs until the script
-has been run successfully. The script is deliberately excluded from CI
-because flight logs must not be committed to the repository.
+The example configuration records expected observations from earlier independent
+inspection, **not** results of executing the new validator. Do not commit
+source ULogs. Tests in CI use synthetic telemetry; real-log validation is a
+separate operational checkpoint.
