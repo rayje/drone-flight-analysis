@@ -6,7 +6,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import subprocess
+from importlib.metadata import version
 
 from .events import reconstruct_events
 from .parsing import read_ulog
@@ -22,14 +22,6 @@ def main() -> None:
     source = args.log.resolve(strict=True)
     if args.output.resolve() == source:
         parser.error("Output must differ from the original log")
-    root = Path(__file__).resolve().parents[2]
-    commit = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-    ).strip()
-    if subprocess.check_output(
-        ["git", "-C", str(root), "status", "--porcelain"], text=True
-    ).strip():
-        parser.error("Commit analysis changes before recording an investigation")
     hasher = hashlib.sha256()
     with source.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -37,7 +29,7 @@ def main() -> None:
     events = reconstruct_events(read_ulog(source), position_instance=args.instance)
     report = {
         "schema_version": 1,
-        "git_commit": commit,
+        "analyzer_version": version("drone-flight-analysis"),
         "source_log": str(source),
         "source_sha256": hasher.hexdigest(),
         "parameters": {"position_instance": args.instance, "timebase": "px4_boot_us"},
