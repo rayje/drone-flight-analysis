@@ -1,0 +1,28 @@
+{
+  "cases": {
+    "log91": {
+      "file": "log_91_2026-11-3-20-13-06.ulg",
+      "expected": {
+        "sha256": "4adcd2d727b8bc5991a4dcd12a550abc8743055d2df92b2d1160ec9f0e4b1dc2",
+        "reset_count": 0,
+        "gap_count": 0
+      }
+    },
+    "log108": {
+      "file": "log_108_2026-11-3-20-13-14.ulg",
+      "expected": {
+        "sha256": "778358785158f3c2acf29d1d6c598e89ef7d1a389aaa0cbee309bc34a05d492a",
+        "reset_count": 0,
+        "gap_count": 3
+      }
+    },
+    "log94": {
+      "file": "log_94_2026-11-3-20-13-18.ulg",
+      "expected": {
+        "sha256": "979a2cfeb4ac15b56ccedf86ee682f911598cab91a6bb4e58a878bef1af08e61",
+        "reset_count": 1,
+        "gap_count": 0
+      }
+    }
+  }
+}
