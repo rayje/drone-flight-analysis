@@ -1,9 +1,10 @@
-"""Additive, conservative quality-aware local-position metrics.
+"""Conservative trajectory quality metrics without modifying source telemetry.
 
-The original reconstruction and CLI output remain unchanged. All timestamps are
-PX4 boot microseconds; coordinates are local NED metres. No gap interpolation,
-geographic conversion, or unverified estimator reset correction is performed.
+All timestamps use PX4 boot microseconds. Positions are local NED metres.
+Quality-filtered distance is a diagnostic, not reconstructed ground truth.
 """
+
+from bisect import bisect_right
 from dataclasses import dataclass
 from math import dist, isfinite
 from statistics import median
@@ -29,118 +30,287 @@ class QualityMetrics:
     max_height_above_takeoff_m: float | None
 
 
-def _topic(topics: tuple[Topic, ...], name: str, instance: int = 0) -> Topic | None:
-    matches = [t for t in topics if t.name == name and t.instance == instance]
+def _find_topic(
+    topics: tuple[Topic, ...],
+    name: str,
+    instance: int = 0,
+) -> Topic | None:
+    matches = [
+        topic
+        for topic in topics
+        if topic.name == name and topic.instance == instance
+    ]
+
     if len(matches) > 1:
         raise ValueError(f"Ambiguous topic: {name} instance {instance}")
+
     return matches[0] if matches else None
 
 
-def _events(topic: Topic | None, field: str) -> tuple[tuple[int, bool], ...] | None:
+def _state_events(
+    topic: Topic | None,
+    field: str,
+) -> tuple[tuple[int, bool], ...] | None:
     if topic is None or field not in topic.fields:
         return None
+
     timestamps = topic.fields.get("timestamp")
     values = topic.fields[field]
+
     if timestamps is None or len(timestamps) != len(values):
         raise ValueError(f"Invalid {topic.name}.{field} series")
-    result = sorted((int(t), bool(v)) for t, v in zip(timestamps, values))
-    if any(t < 0 for t, _ in result):
+
+    events = sorted(
+        (int(timestamp), bool(value))
+        for timestamp, value in zip(timestamps, values)
+    )
+
+    if any(timestamp < 0 for timestamp, _ in events):
         raise ValueError("Negative state timestamp")
-    return tuple(result)
+
+    return tuple(events)
 
 
-def _state_durations(events: tuple[tuple[int, bool], ...] | None,
-                     start: int, end: int) -> float | None:
+def _active_duration(
+    events: tuple[tuple[int, bool], ...] | None,
+    start_us: int,
+    end_us: int,
+) -> float | None:
     if not events:
         return None
-    # Do not extrapolate state before the first observation.
-    duration = 0
-    previous = max(start, events[0][0])
+
+    duration_us = 0
+    previous_us = max(start_us, events[0][0])
     active = False
-    for t, value in events:
-        if t < start:
+
+    for timestamp_us, value in events:
+        if timestamp_us < start_us:
             active = value
-            previous = start
+            previous_us = start_us
             continue
-        if t > end:
+
+        if timestamp_us > end_us:
             break
-        if active and t > previous:
-            duration += t - previous
-        previous, active = max(t, start), value
-    if active and end > previous:
-        duration += end - previous
-    return duration / 1_000_000
+
+        if active and timestamp_us > previous_us:
+            duration_us += timestamp_us - previous_us
+
+        previous_us = timestamp_us
+        active = value
+
+    if active and end_us > previous_us:
+        duration_us += end_us - previous_us
+
+    return duration_us / 1_000_000
 
 
-def analyze_quality(samples: Iterable[PositionSample], topics: Iterable[Topic],
-                    *, gap_factor: float = 1.5,
-                    minimum_gap_s: float = 0.15) -> QualityMetrics:
-    """Flag discontinuities; never silently bridge resets or significant gaps.
+def _discontinuity_times(position_topic: Topic | None) -> tuple[int, ...]:
+    if position_topic is None:
+        return ()
 
-    The gap threshold is max(minimum_gap_s, gap_factor * median sample interval).
-    Both position reset counters and local reference changes mark an edge.
-    Distance excluded from the quality estimate is reported, not discarded.
+    fields = position_topic.fields
+    timestamps = fields.get("timestamp", ())
+    changes = set()
+
+    for field_name in (
+        "xy_reset_counter",
+        "z_reset_counter",
+        "ref_timestamp",
+    ):
+        values = fields.get(field_name)
+
+        if values is None:
+            continue
+
+        if len(values) != len(timestamps):
+            raise ValueError(f"Mismatched {field_name} lengths")
+
+        for index in range(1, len(timestamps)):
+            if values[index] != values[index - 1]:
+                changes.add(int(timestamps[index]))
+
+    return tuple(sorted(changes))
+
+
+def _takeoff_relative_height(
+    points: tuple[PositionSample, ...],
+    landed_events: tuple[tuple[int, bool], ...] | None,
+) -> float | None:
+    if not landed_events:
+        return None
+
+    start_us = points[0].timestamp_us
+    end_us = points[-1].timestamp_us
+
+    for previous, current in zip(landed_events, landed_events[1:]):
+        takeoff_us, is_landed = current
+
+        if not previous[1] or is_landed:
+            continue
+
+        if not start_us <= takeoff_us <= end_us:
+            continue
+
+        ground_samples = [
+            sample for sample in points
+            if sample.timestamp_us <= takeoff_us
+        ]
+        airborne_samples = [
+            sample for sample in points
+            if sample.timestamp_us >= takeoff_us
+        ]
+
+        if not ground_samples or not airborne_samples:
+            return None
+
+        ground_height_m = -ground_samples[-1].down_m
+
+        return max(
+            -sample.down_m - ground_height_m
+            for sample in airborne_samples
+        )
+
+    return None
+
+
+def analyze_quality(
+    samples: Iterable[PositionSample],
+    topics: Iterable[Topic],
+    *,
+    gap_factor: float = 1.5,
+    minimum_gap_s: float = 0.15,
+) -> QualityMetrics:
+    """Exclude reset/gap-crossing edges only from quality-filtered distance.
+
+    The gap threshold is the greater of minimum_gap_s and gap_factor times
+    the median position interval. Neither parameter is a validated Firefly
+    aircraft limit. Original samples and raw distance remain unchanged.
     """
-    points, datasets = tuple(samples), tuple(topics)
+    points = tuple(samples)
+    datasets = tuple(topics)
+
     if not points:
         raise ValueError("No position samples")
-    if not isfinite(gap_factor) or gap_factor <= 1 or not isfinite(minimum_gap_s) or minimum_gap_s <= 0:
+
+    if (
+        not isfinite(gap_factor)
+        or gap_factor <= 1
+        or not isfinite(minimum_gap_s)
+        or minimum_gap_s <= 0
+    ):
         raise ValueError("Invalid gap threshold")
-    if any(not all(isfinite(v) for v in (p.north_m, p.east_m, p.down_m)) or p.timestamp_us < 0 for p in points):
-        raise ValueError("Invalid position sample")
-    if any(b.timestamp_us <= a.timestamp_us for a, b in zip(points, points[1:])):
-        raise ValueError("Position timestamps must increase")
-    position = _topic(datasets, "vehicle_local_position")
-    reset_times = set()
-    if position is not None:
-        f = position.fields
-        ts = f.get("timestamp", ())
-        for field in ("xy_reset_counter", "z_reset_counter", "ref_timestamp"):
-            if field not in f:
-                continue
-            if len(f[field]) != len(ts):
-                raise ValueError(f"Mismatched {field} lengths")
-            for i in range(1, len(ts)):
-                if f[field][i] != f[field][i-1]:
-                    reset_times.add(int(ts[i]))
-    intervals = [(b.timestamp_us-a.timestamp_us)/1_000_000 for a,b in zip(points,points[1:])]
-    threshold = max(minimum_gap_s, gap_factor*median(intervals)) if intervals else minimum_gap_s
-    raw = kept = 0.0
-    excluded = []
-    for a,b,delta in zip(points,points[1:],intervals):
-        length = dist((a.north_m,a.east_m,a.down_m),(b.north_m,b.east_m,b.down_m))
-        raw += length
+
+    for point in points:
+        coordinates = (point.north_m, point.east_m, point.down_m)
+
+        if point.timestamp_us < 0 or not all(map(isfinite, coordinates)):
+            raise ValueError("Invalid position sample")
+
+    intervals_s = []
+
+    for previous, current in zip(points, points[1:]):
+        delta_us = current.timestamp_us - previous.timestamp_us
+
+        if delta_us <= 0:
+            raise ValueError("Position timestamps must increase")
+
+        intervals_s.append(delta_us / 1_000_000)
+
+    gap_threshold_s = minimum_gap_s
+
+    if intervals_s:
+        gap_threshold_s = max(
+            minimum_gap_s,
+            gap_factor * median(intervals_s),
+        )
+
+    position_topic = _find_topic(datasets, "vehicle_local_position")
+    discontinuities = _discontinuity_times(position_topic)
+
+    raw_distance_m = 0.0
+    quality_distance_m = 0.0
+    excluded_edges = []
+
+    for previous, current, interval_s in zip(
+        points,
+        points[1:],
+        intervals_s,
+    ):
+        previous_xyz = (
+            previous.north_m,
+            previous.east_m,
+            previous.down_m,
+        )
+        current_xyz = (
+            current.north_m,
+            current.east_m,
+            current.down_m,
+        )
+        edge_distance_m = dist(previous_xyz, current_xyz)
+        raw_distance_m += edge_distance_m
+
         reasons = []
-        if delta > threshold:
+
+        if interval_s > gap_threshold_s:
             reasons.append("gap")
-        if any(a.timestamp_us < t <= b.timestamp_us for t in reset_times):
+
+        # Find the first reset strictly after the preceding sample.
+        reset_index = bisect_right(discontinuities, previous.timestamp_us)
+
+        if (
+            reset_index < len(discontinuities)
+            and discontinuities[reset_index] <= current.timestamp_us
+        ):
             reasons.append("reset_or_reference_change")
+
         if reasons:
-            excluded.append((a.timestamp_us,b.timestamp_us,"+".join(reasons)))
+            excluded_edges.append(
+                (
+                    previous.timestamp_us,
+                    current.timestamp_us,
+                    "+".join(reasons),
+                )
+            )
         else:
-            kept += length
-    armed = _events(_topic(datasets,"actuator_armed"),"armed")
-    landed = _events(_topic(datasets,"vehicle_land_detected"),"landed")
-    start,end = points[0].timestamp_us,points[-1].timestamp_us
-    armed_duration = _state_durations(armed,start,end)
-    airborne_duration = _state_durations(
-        tuple((t,not value) for t,value in landed) if landed else None,start,end)
-    # Takeoff reference requires a transition from landed to airborne and a
-    # preceding sampled ground position. Otherwise the value is unknown.
-    takeoff_height = None
-    if landed:
-        transitions = [t for (prev_t,prev),(t,now) in zip(landed,landed[1:])
-                       if prev and not now and start <= t <= end]
-        if transitions:
-            t0=transitions[0]
-            before=[p for p in points if p.timestamp_us <= t0]
-            if before:
-                ground=-before[-1].down_m
-                airborne_points=[p for p in points if p.timestamp_us >= t0]
-                if airborne_points:
-                    takeoff_height=max(-p.down_m-ground for p in airborne_points)
-    heights=[-p.down_m for p in points]
-    return QualityMetrics((end-start)/1_000_000,armed_duration,airborne_duration,
-                          raw,kept,raw-kept,tuple(excluded),threshold,
-                          max(intervals,default=0.0),len(reset_times),
-                          min(heights),max(heights),takeoff_height)
+            quality_distance_m += edge_distance_m
+
+    armed_events = _state_events(
+        _find_topic(datasets, "actuator_armed"),
+        "armed",
+    )
+    landed_events = _state_events(
+        _find_topic(datasets, "vehicle_land_detected"),
+        "landed",
+    )
+
+    start_us = points[0].timestamp_us
+    end_us = points[-1].timestamp_us
+
+    airborne_events = None
+
+    if landed_events:
+        airborne_events = tuple(
+            (timestamp_us, not is_landed)
+            for timestamp_us, is_landed in landed_events
+        )
+
+    heights_m = [-point.down_m for point in points]
+
+    return QualityMetrics(
+        recorded_duration_s=(end_us - start_us) / 1_000_000,
+        armed_duration_s=_active_duration(armed_events, start_us, end_us),
+        airborne_duration_s=_active_duration(airborne_events, start_us, end_us),
+        raw_distance_m=raw_distance_m,
+        quality_distance_m=quality_distance_m,
+        excluded_distance_m=raw_distance_m - quality_distance_m,
+        excluded_edges=tuple(excluded_edges),
+        gap_threshold_s=gap_threshold_s,
+        max_gap_s=max(intervals_s, default=0.0),
+        reset_count=len(discontinuities),
+        min_height_above_origin_m=min(heights_m),
+        max_height_above_origin_m=max(heights_m),
+        max_height_above_takeoff_m=_takeoff_relative_height(
+            points,
+            landed_events,
+        ),
+    )
