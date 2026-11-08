@@ -1,5 +1,14 @@
 # Quality-aware trajectory metrics (experimental)
 
+**Production vs test separation:** `src/drone_flight_analysis/quality.py` is
+production analysis code, not an integration test. It measures how trustworthy
+sampled local-position path metrics are by flagging gaps and estimator
+reference/reset changes. These diagnostics can inform future incident timelines
+and root-cause investigations, but are not themselves a root-cause finding.
+`tests/integration/validate_logs.py` is the test-only runner that checks
+these calculations against configured known logs. It is not imported by the
+production flight-analysis modules.
+
 The original `reconstruct_flight` and CLI report are intentionally unchanged.
 `drone_flight_analysis.quality.analyze_quality` is an **additive API** for
 conservative local-position diagnostics. It does not establish physical ground
@@ -11,7 +20,7 @@ from drone_flight_analysis.quality import analyze_quality
 
 topics = read_ulog("/path/to/flight.ulg")
 samples = normalize_local_position(topics, instance=0)
-metrics = analyze_quality(samples, topics)
+metrics = analyze_quality(samples, topics, position_instance=0)
 print(metrics.raw_distance_m, metrics.quality_distance_m)
 print(metrics.excluded_edges)
 ```
@@ -78,3 +87,19 @@ The example configuration records expected observations from earlier independent
 inspection, **not** results of executing the new validator. Do not commit
 source ULogs. Tests in CI use synthetic telemetry; real-log validation is a
 separate operational checkpoint.
+
+## Analysis component responsibilities
+
+- `parsing.py` reads ULog datasets without modifying source logs.
+- `normalization.py` selects and validates the requested local-position topic instance.
+- `reconstruction.py` computes baseline sampled trajectory metrics without quality filtering.
+- `quality.py` supplements that baseline with observed gaps, resets, state durations,
+  and conservative quality-filtered distance; it is analysis code intended for
+  future incident reporting, not a test utility.
+- `tests/integration/validate_logs.py` executes configured regression checks
+  using those production modules; it never supplies analysis logic to them.
+
+The named configuration key (for example `log91`) is a user-facing case selector.
+The `file` field independently identifies the ULog, so renaming a case does not
+change which file is read. The integration test also checks that the configured
+position-topic instance is honored, rather than silently using instance zero.
