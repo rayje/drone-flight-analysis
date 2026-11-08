@@ -40,11 +40,25 @@ def load_cases(config_path: Path) -> dict:
         raise ValueError("Configuration must contain a nonempty 'cases' object")
 
     for key, case in cases.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("Case keys must be nonempty strings")
+
         if not isinstance(case, dict) or not isinstance(case.get("file"), str):
             raise ValueError(f"Case {key!r} must define a file path")
 
         if not case["file"]:
             raise ValueError(f"Case {key!r} has an empty file path")
+
+        instance = case.get("instance", 0)
+
+        if type(instance) is not int or instance < 0:
+            raise ValueError(f"Case {key!r} instance must be a nonnegative integer")
+
+        for parameter, default in (("gap_factor", 1.5), ("minimum_gap_s", 0.15)):
+            value = case.get(parameter, default)
+
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"Case {key!r} {parameter} must be numeric")
 
         expected = case.get("expected", {})
 
@@ -55,6 +69,20 @@ def load_cases(config_path: Path) -> dict:
 
         if unknown:
             raise ValueError(f"Case {key!r} has unknown expectations: {sorted(unknown)}")
+
+        if "sha256" in expected:
+            digest = expected["sha256"]
+
+            if not isinstance(digest, str) or len(digest) != 64 or any(
+                character not in "0123456789abcdefABCDEF" for character in digest
+            ):
+                raise ValueError(f"Case {key!r} expected.sha256 must be 64 hex characters")
+
+        for metric in ("reset_count", "gap_count"):
+            if metric in expected and (
+                type(expected[metric]) is not int or expected[metric] < 0
+            ):
+                raise ValueError(f"Case {key!r} expected.{metric} must be a nonnegative integer")
 
     return cases
 
