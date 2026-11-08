@@ -49,3 +49,25 @@ print(metrics.excluded_edges)
 
 This module is intended as the first step toward incident timeline reconstruction,
 not a root-cause determination. Keep original logs outside Git.
+
+## Real-log regression checkpoint
+
+With the original November 3 logs in a local directory, run:
+
+```sh
+python scripts/validate_november_logs.py /path/to/log-directory
+```
+
+The script verifies known source SHA-256 hashes before parsing, compares raw
+distance with the original reconstruction, and checks the expected reset and
+significant-gap counts. It prints recorded, armed, and airborne durations as
+well as raw and quality-filtered distance. It never modifies the source files
+or writes a report.
+
+Expected diagnostics from the earlier independent inspection: log 91 has no
+reset or significant position gap; log 108 has three significant local-position
+interval gaps (separate from nine ULog dropout records); log 94 has one
+simultaneous horizontal/vertical reset event. These expectations are **not**
+proof that the new algorithm has passed on the real logs until the script
+has been run successfully. The script is deliberately excluded from CI
+because flight logs must not be committed to the repository.
