@@ -160,3 +160,32 @@ def test_gap_and_reset_on_same_edge_are_both_reported():
     assert result.excluded_edges == (
         (100_000, 500_000, "gap+reset_or_reference_change"),
     )
+
+
+def test_quality_uses_selected_position_instance_for_resets():
+    samples = position_samples(0, 100_000, 200_000)
+    instance_zero = Topic(
+        "vehicle_local_position",
+        0,
+        {
+            "timestamp": [0, 100_000, 200_000],
+            "xy_reset_counter": [0, 0, 1],
+        },
+    )
+    instance_one = Topic(
+        "vehicle_local_position",
+        1,
+        {
+            "timestamp": [0, 100_000, 200_000],
+            "xy_reset_counter": [0, 0, 0],
+        },
+    )
+
+    result = analyze_quality(
+        samples,
+        [instance_zero, instance_one],
+        position_instance=1,
+    )
+
+    assert result.reset_count == 0
+    assert result.excluded_edges == ()
