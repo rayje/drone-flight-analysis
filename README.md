@@ -1,6 +1,6 @@
 # drone-flight-analysis
 
-Initial Python framework for investigating Firefly Gen 2 PX4 ULog (`.ulg`)
+Initial Python framework for investigating PX4 ULog (`.ulg`)
 flight logs. Requires Python 3.10 or newer. No aircraft-specific calibration
 or hardware access is required.
 
@@ -54,8 +54,8 @@ print(flight.duration_s, flight.distance_m)
 
 The initial framework analyzes one local trajectory. It does not segment armed
 flights, correct estimator origin resets, interpolate gaps, perform geodetic
-conversion, or interpret Firefly-specific channels. Distance can include jumps
-from resets or telemetry gaps. No real Firefly logs are bundled; tests exercise
+conversion, or interpret specific channels. Distance can include jumps
+from resets or telemetry gaps. No real logs are bundled; tests exercise
 a generated ULog through pyulog and deterministic telemetry cases. Validate
 against representative aircraft logs before drawing operational conclusions.
 
