@@ -179,6 +179,7 @@ def analyze_quality(
     *,
     gap_factor: float = 1.5,
     minimum_gap_s: float = 0.15,
+    position_instance: int = 0,
 ) -> QualityMetrics:
     """Exclude reset/gap-crossing edges only from quality-filtered distance.
 
@@ -224,7 +225,9 @@ def analyze_quality(
             gap_factor * median(intervals_s),
         )
 
-    position_topic = _find_topic(datasets, "vehicle_local_position")
+    position_topic = _find_topic(
+        datasets, "vehicle_local_position", instance=position_instance
+    )
     discontinuities = _discontinuity_times(position_topic)
 
     raw_distance_m = 0.0
