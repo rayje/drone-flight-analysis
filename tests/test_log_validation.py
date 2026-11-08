@@ -34,7 +34,12 @@ def test_invalid_configuration_rejected(tmp_path, case):
         VALIDATOR.load_cases(write_config(tmp_path, {"case": case}))
 
 
-def test_config_keys_are_independent_of_filenames(tmp_path, monkeypatch, capsys):
+def test_named_case_selects_configured_file_and_position_instance(tmp_path, monkeypatch, capsys):
+    """A case key is an operator-facing label, not an implicit filename or topic.
+
+    Verify the runner reads the file specified by the case and forwards its
+    selected topic instance to both normalization and reset detection.
+    """
     log_file = tmp_path / "arbitrary.ulg"
     log_file.write_bytes(b"fake test source")
     digest = VALIDATOR.sha256_file(log_file)
@@ -63,7 +68,13 @@ def test_config_keys_are_independent_of_filenames(tmp_path, monkeypatch, capsys)
             },
         ),
     )
-    monkeypatch.setattr(VALIDATOR, "read_ulog", lambda path: topics)
+    parsed_paths = []
+
+    def fake_read_ulog(path):
+        parsed_paths.append(path)
+        return topics
+
+    monkeypatch.setattr(VALIDATOR, "read_ulog", fake_read_ulog)
 
     case = {
         "file": log_file.name,
@@ -74,6 +85,7 @@ def test_config_keys_are_independent_of_filenames(tmp_path, monkeypatch, capsys)
 
     VALIDATOR.validate_case("my-flight", cases["my-flight"], tmp_path)
 
+    assert parsed_paths == [log_file.resolve()]
     assert "PASS my-flight" in capsys.readouterr().out
 
 
