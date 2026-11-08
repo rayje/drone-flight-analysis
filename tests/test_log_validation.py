@@ -1,18 +1,13 @@
 """Tests for config-driven log validation independent of source ULogs."""
 
-import importlib.util
 import json
-from pathlib import Path
 
 import pytest
 
 from drone_flight_analysis.models import Topic
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "validate_logs.py"
-SPEC = importlib.util.spec_from_file_location("validate_logs", SCRIPT_PATH)
-VALIDATOR = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(VALIDATOR)
+from tests.integration import validate_logs as VALIDATOR
 
 
 def write_config(tmp_path, cases):
