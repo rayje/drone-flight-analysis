@@ -5,6 +5,7 @@ previous and current samples; command records are observations of logged
 messages, not proof of command acceptance or execution.
 """
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Iterable
 
 from .models import Topic
@@ -22,6 +23,7 @@ class FlightEvent:
     sample_index: int
     previous_value: object = None
     value: object = None
+    command_result: object = None
 
     def as_dict(self) -> dict:
         """Return a JSON-compatible, explicitly timed event."""
@@ -36,6 +38,7 @@ class FlightEvent:
             "sample_index": self.sample_index,
             "previous_value": self.previous_value,
             "value": self.value,
+            "command_result": self.command_result,
         }
 
 
@@ -72,7 +75,7 @@ def _series(topic: Topic, field: str) -> tuple[tuple[int, int, object], ...]:
         raise ValueError(f"{topic.name}[{topic.instance}].{field} length mismatch")
     rows = []
     for index, (timestamp, value) in enumerate(zip(timestamps, values)):
-        if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp < 0:
+        if isinstance(timestamp, bool) or not isinstance(timestamp, Integral) or timestamp < 0:
             raise ValueError(f"Invalid timestamp in {topic.name}.{field}")
         # Numpy integer types from pyulog support __index__.
         rows.append((int(timestamp), index, value.item() if hasattr(value, "item") else value))
@@ -110,7 +113,7 @@ def reconstruct_events(
         if topic.name == "failsafe_flags" and include_failsafe_flags:
             # Only boolean-valued flags; exclude timestamps and numeric counters.
             for field, values in topic.fields.items():
-                if field != "timestamp" and values and all(
+                if field != "timestamp" and len(values) > 0 and all(
                     isinstance(v, bool) or type(v).__name__ in ("bool_",)
                     for v in values
                 ):
@@ -141,7 +144,8 @@ def reconstruct_events(
                         events[event_index] = FlightEvent(
                             event.event_type, event.timestamp_us, event.earliest_us,
                             event.source_topic, event.source_instance, event.source_field,
-                            event.sample_index, result[event.sample_index], event.value,
+                            event.sample_index, None, event.value,
+                            result[event.sample_index].item() if hasattr(result[event.sample_index], "item") else result[event.sample_index],
                         )
     return tuple(sorted(events, key=lambda e: (
         e.timestamp_us, e.source_topic, e.source_instance, e.sample_index, e.source_field
