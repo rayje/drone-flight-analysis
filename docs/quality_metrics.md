@@ -52,19 +52,19 @@ not a root-cause determination. Keep original logs outside Git.
 
 ## Configuration-driven log validation
 
-The generic validator contains no aircraft names or log filenames. Define
+The test-only integration validator at `tests/integration/validate_logs.py` contains no aircraft names or log filenames. Define
 named cases in a JSON file (see `config/november_log_validation.json`).
 Each case requires `file` and can optionally include `instance`,
 `gap_factor`, `minimum_gap_s`, and `expected` with any combination of
 `sha256`, `reset_count`, or `gap_count`.
 
 ```sh
-python scripts/validate_logs.py \
+python -m tests.integration.validate_logs \
   --config config/november_log_validation.json \
   --log-directory /path/to/logs \
   --keys log91 log94
 
-python scripts/validate_logs.py \
+python -m tests.integration.validate_logs \
   --config config/november_log_validation.json \
   --log-directory /path/to/logs --all
 ```
