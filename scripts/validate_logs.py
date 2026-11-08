@@ -85,6 +85,7 @@ def validate_case(
     quality = analyze_quality(
         samples,
         topics,
+        position_instance=case.get("instance", 0),
         gap_factor=case.get("gap_factor", 1.5),
         minimum_gap_s=case.get("minimum_gap_s", 0.15),
     )
