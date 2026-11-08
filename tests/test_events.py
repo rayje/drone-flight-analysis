@@ -56,7 +56,8 @@ def test_command_ack_preserves_result_and_does_not_claim_acceptance():
         "timestamp": [100], "command": [20], "result": [1]
     })])
     assert events[0].event_type == "command_ack_observed"
-    assert events[0].previous_value == 1
+    assert events[0].command_result == 1
+    assert events[0].previous_value is None
 
 
 def test_unsorted_source_preserves_sample_index():
