@@ -116,6 +116,7 @@ def _active_duration(
 
 
 def _discontinuity_times(position_topic: Topic | None) -> tuple[int, ...]:
+    """Identify timestamps where reset counters or local reference timestamps change."""
     if position_topic is None:
         return ()
 
@@ -148,7 +149,6 @@ def _takeoff_relative_height(
     landed_events: tuple[tuple[int, bool], ...] | None,
 ) -> float | None:
     """Estimate maximum height relative to the position immediately before takeoff."""
-    """Identify timestamps where reset counters or local reference timestamps change."""
     if not landed_events:
         return None
 
