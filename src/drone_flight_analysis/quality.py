@@ -1,4 +1,12 @@
-"""Conservative trajectory quality metrics without modifying source telemetry.
+"""Production analysis of local-position telemetry quality for flight investigations.
+
+This module is part of the analysis pipeline, NOT the integration-test harness.
+It supplements trajectory reconstruction by identifying position-sampling gaps
+and estimator reference/reset discontinuities that could distort sampled path
+length. Future incident reports can consume QualityMetrics to flag unreliable
+trajectory segments alongside synchronized event timelines. It does not infer
+root cause or correct the aircraft trajectory, and the current CLI does not
+include these metrics yet.
 
 All timestamps use PX4 boot microseconds. Positions are local NED metres.
 Quality-filtered distance is a diagnostic, not reconstructed ground truth.
@@ -35,6 +43,7 @@ def _find_topic(
     name: str,
     instance: int = 0,
 ) -> Topic | None:
+    """Find a single named topic instance, rejecting ambiguous duplicate datasets."""
     matches = [
         topic
         for topic in topics
@@ -51,6 +60,7 @@ def _state_events(
     topic: Topic | None,
     field: str,
 ) -> tuple[tuple[int, bool], ...] | None:
+    """Read timestamped boolean state transitions; return None when unavailable."""
     if topic is None or field not in topic.fields:
         return None
 
@@ -76,6 +86,7 @@ def _active_duration(
     start_us: int,
     end_us: int,
 ) -> float | None:
+    """Sum intervals in the active state within the observed position window."""
     if not events:
         return None
 
@@ -136,6 +147,8 @@ def _takeoff_relative_height(
     points: tuple[PositionSample, ...],
     landed_events: tuple[tuple[int, bool], ...] | None,
 ) -> float | None:
+    """Estimate maximum height relative to the position immediately before takeoff."""
+    """Identify timestamps where reset counters or local reference timestamps change."""
     if not landed_events:
         return None
 
@@ -181,7 +194,9 @@ def analyze_quality(
     minimum_gap_s: float = 0.15,
     position_instance: int = 0,
 ) -> QualityMetrics:
-    """Exclude reset/gap-crossing edges only from quality-filtered distance.
+    """Calculate diagnostic trajectory quality metrics for incident reconstruction.
+
+    Exclude reset/gap-crossing edges only from quality-filtered distance.
 
     The gap threshold is the greater of minimum_gap_s and gap_factor times
     the median position interval. Neither parameter is a validated Firefly
