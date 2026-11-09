@@ -91,12 +91,39 @@ def reconstruct_events(
     position_instance: int = 0,
     include_failsafe_flags: bool = True,
 ) -> tuple[FlightEvent, ...]:
-    """Extract source-traceable transitions and commands from one aircraft log.
+    """Build a chronological timeline of observed events from one PX4 ULog.
 
-    The event timestamp is the first sample showing the new value. For a
-    transition, earliest_us is the previous observation; the actual transition
-    is only known to lie in (earliest_us, timestamp_us]. No synthetic initial
-    state is emitted. Unknown topics and missing fields are ignored.
+    Why:
+        PX4 records aircraft state, position-estimator resets, and commands in
+        separate timestamped topics. Combining their observations into one
+        ordered timeline makes it possible to inspect what was recorded before
+        and after an incident without assuming a cause.
+
+    How:
+        Examine supported fields in each topic, emitting an event whenever a
+        state value changes between consecutive samples. Emit each recorded
+        vehicle command and acknowledgment as its own event. Preserve the
+        source topic, instance, field, and original sample index, then sort all
+        events by PX4 boot timestamp. A state transition happened sometime
+        after the previous sample and no later than the current sample; the
+        precise transition time is not known. No initial state is inferred,
+        and missing topics or fields do not generate invented events.
+
+    Args:
+        topics: Parsed Topic records from a single aircraft ULog. Each record
+            contains a topic name, instance number, and timestamped fields.
+        position_instance: Which vehicle_local_position topic instance to use
+            for position reset and reference-change events (default 0).
+        include_failsafe_flags: Whether to include changes in boolean-valued
+            fields of the failsafe_flags topic (default True).
+
+    Returns:
+        An immutable tuple of FlightEvent records sorted by boot timestamp.
+        These are logged observations, not proof of cause or command execution.
+
+    Raises:
+        ValueError: If extracted field lengths or timestamps are invalid, or
+            the input contains duplicate topic-name/instance pairs.
     """
     events = []
     seen = set()
