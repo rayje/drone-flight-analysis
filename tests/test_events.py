@@ -97,3 +97,25 @@ def test_does_not_mutate_input():
     fields = {"timestamp": [300, 100], "nav_state": [18, 3]}
     reconstruct_events([topic("vehicle_status", fields)])
     assert fields["timestamp"] == [300, 100]
+
+
+def test_position_reset_and_reference_change_are_separate_source_traced_events():
+    """Regression for the concurrent reset-counter/reference changes seen in log94."""
+    events = reconstruct_events([topic("vehicle_local_position", {
+        "timestamp": [1483066000, 1483166000],
+        "xy_reset_counter": [4, 5],
+        "z_reset_counter": [4, 5],
+        "ref_timestamp": [123456, 123789],
+    })])
+    assert {e.event_type for e in events} == {
+        "position_xy_reset", "position_z_reset", "position_reference_changed"
+    }
+    assert all(e.earliest_us == 1483066000 for e in events)
+    assert all(e.timestamp_us == 1483166000 for e in events)
+    assert all(e.source_topic == "vehicle_local_position" for e in events)
+    assert all(e.sample_index == 1 for e in events)
+    assert {e.source_field: (e.previous_value, e.value) for e in events} == {
+        "xy_reset_counter": (4, 5),
+        "z_reset_counter": (4, 5),
+        "ref_timestamp": (123456, 123789),
+    }
